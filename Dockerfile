@@ -16,6 +16,7 @@ COPY --from=builder /app/server /app/server
 
 ENV GIN_MODE=release
 ENV PORT=7860
+ENV DATA_DIR=/data
 
 EXPOSE 7860
 
