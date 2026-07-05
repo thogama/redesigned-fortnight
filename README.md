@@ -1,6 +1,6 @@
 ---
 title: CloudMailin Webhook Listener
-emoji: email
+emoji: 📬
 colorFrom: blue
 colorTo: indigo
 sdk: docker
