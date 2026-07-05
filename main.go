@@ -40,7 +40,14 @@ func main() {
 
 	router.POST("/webhook/cloudmailin", cloudMailinWebhook)
 
-	router.Run() // listens on 0.0.0.0:8080 by default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "7860"
+	}
+
+	if err := router.Run("0.0.0.0:" + port); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func cloudMailinWebhook(c *gin.Context) {
