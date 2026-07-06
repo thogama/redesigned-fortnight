@@ -11,7 +11,7 @@
 bin/
 dist/
 build/
-
+tmp/
 # Local generated data
 data/
 

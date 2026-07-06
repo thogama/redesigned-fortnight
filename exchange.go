@@ -12,9 +12,13 @@ type ExchangeRateResponse struct {
 	Rates  map[string]float64 `json:"rates"`
 }
 
-func fetchUSDBRLRate() (float64, error) {
+func fetchCurrencyBRLRate(currency string) (float64, error) {
+	if currency == "BRL" {
+		return 1, nil
+	}
+
 	client := http.Client{Timeout: 5 * time.Second}
-	request, err := http.NewRequest(http.MethodGet, "https://open.er-api.com/v6/latest/USD", nil)
+	request, err := http.NewRequest(http.MethodGet, "https://open.er-api.com/v6/latest/"+currency, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -36,7 +40,7 @@ func fetchUSDBRLRate() (float64, error) {
 
 	rate, ok := result.Rates["BRL"]
 	if !ok || rate <= 0 {
-		return 0, fmt.Errorf("USD/BRL rate not found")
+		return 0, fmt.Errorf("%s/BRL rate not found", currency)
 	}
 
 	return rate, nil

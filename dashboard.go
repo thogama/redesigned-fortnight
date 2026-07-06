@@ -8,15 +8,10 @@ import (
 
 type MonthlySpend struct {
 	Month         string
-	Slug          string
 	MonthLabel    string
 	Total         float64
 	TotalBRLLabel string
 	Count         int
-}
-
-type MonthPageData struct {
-	Spend MonthlySpend
 }
 
 type DashboardData struct {
@@ -40,8 +35,6 @@ var dashboardTemplate = htmltemplate.Must(htmltemplate.New("dashboard").Parse(`<
     h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
     p { margin: 0; color: #667085; }
     table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d9e0ea; }
-    a { color: #2457a6; text-decoration: none; }
-    a:hover { text-decoration: underline; }
     th, td { padding: 14px 16px; border-bottom: 1px solid #e8edf3; text-align: left; }
     th { background: #eef3f9; font-size: 13px; text-transform: uppercase; color: #46566f; }
     td:last-child, th:last-child { text-align: right; }
@@ -67,7 +60,6 @@ var dashboardTemplate = htmltemplate.Must(htmltemplate.New("dashboard").Parse(`<
           <th>Mês</th>
           <th>Compras</th>
           <th>Total</th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -76,7 +68,6 @@ var dashboardTemplate = htmltemplate.Must(htmltemplate.New("dashboard").Parse(`<
           <td>{{.MonthLabel}}</td>
           <td>{{.Count}}</td>
           <td>{{.TotalBRLLabel}}</td>
-          <td><a href="/months/{{.Slug}}">Ver</a></td>
         </tr>
         {{end}}
       </tbody>
@@ -84,34 +75,6 @@ var dashboardTemplate = htmltemplate.Must(htmltemplate.New("dashboard").Parse(`<
     {{else}}
     <div class="empty">Nenhum gasto registrado ainda.</div>
     {{end}}
-  </main>
-</body>
-</html>`))
-
-var monthTemplate = htmltemplate.Must(htmltemplate.New("month").Parse(`<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Spend.MonthLabel}}</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, Helvetica, sans-serif; }
-    body { margin: 0; background: #f5f7fb; color: #1d2433; }
-    main { max-width: 920px; margin: 0 auto; padding: 32px 20px; }
-    a { color: #2457a6; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    header { margin-bottom: 24px; }
-    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
-    p { margin: 0; color: #667085; }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <p style="margin-bottom:16px"><a href="/">Voltar</a></p>
-      <h1>{{.Spend.MonthLabel}}</h1>
-      <p>Arquivo: {{.Spend.Slug}}.csv</p>
-    </header>
   </main>
 </body>
 </html>`))
@@ -133,4 +96,8 @@ func monthLabel(timestamp time.Time) string {
 	}
 
 	return fmt.Sprintf("%s de %d", months[timestamp.Month()-1], timestamp.Year())
+}
+
+func formatBRL(value float64) string {
+	return fmt.Sprintf("R$ %.2f", value)
 }

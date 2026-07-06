@@ -12,6 +12,15 @@ import (
 )
 
 func appendPurchaseCSV(event CryptoPurchaseEvent) error {
+	rate, err := fetchCurrencyBRLRate(event.Currency)
+	if err != nil {
+		return err
+	}
+
+	return appendPurchaseCSVWithRate(event, rate)
+}
+
+func appendPurchaseCSVWithRate(event CryptoPurchaseEvent, rate float64) error {
 	dir := dataDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -31,11 +40,17 @@ func appendPurchaseCSV(event CryptoPurchaseEvent) error {
 
 	writer := csv.NewWriter(file)
 	if needsHeader {
-		if err := writer.Write([]string{"value", "timestamp", "category"}); err != nil {
+		if err := writer.Write([]string{"value", "timestamp", "currency", "exchange_rate", "category"}); err != nil {
 			return err
 		}
 	}
-	if err := writer.Write([]string{event.Value, event.Timestamp.Format(time.RFC3339), ""}); err != nil {
+	if err := writer.Write([]string{
+		event.Value,
+		event.Timestamp.Format(time.RFC3339),
+		event.Currency,
+		strconv.FormatFloat(rate, 'f', 6, 64),
+		"",
+	}); err != nil {
 		return err
 	}
 	writer.Flush()
@@ -50,7 +65,7 @@ func readMonthlySpends() ([]MonthlySpend, error) {
 
 	monthly := make(map[string]*MonthlySpend)
 	for _, fileName := range files {
-		if err := readMonthlySpendsFile(fileName, monthly, fileSlug(fileName)); err != nil {
+		if err := readMonthlySpendsFile(fileName, monthly); err != nil {
 			log.Printf("failed to read spend file %s: %v", fileName, err)
 		}
 	}
@@ -67,22 +82,7 @@ func readMonthlySpends() ([]MonthlySpend, error) {
 	return spends, nil
 }
 
-func readMonthlySpendBySlug(slug string) (MonthlySpend, bool, error) {
-	spends, err := readMonthlySpends()
-	if err != nil {
-		return MonthlySpend{}, false, err
-	}
-
-	for _, spend := range spends {
-		if spend.Slug == slug {
-			return spend, true, nil
-		}
-	}
-
-	return MonthlySpend{}, false, nil
-}
-
-func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend, slug string) error {
+func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend) error {
 	file, err := os.Open(fileName)
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend, sl
 			continue
 		}
 
-		value, err := strconv.ParseFloat(strings.TrimSpace(record[0]), 64)
+		rawValue, brlValue, err := purchaseValues(record)
 		if err != nil {
 			continue
 		}
@@ -117,20 +117,31 @@ func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend, sl
 		if _, ok := monthly[month]; !ok {
 			monthly[month] = &MonthlySpend{
 				Month:      month,
-				Slug:       slug,
 				MonthLabel: monthLabel(timestamp.Local()),
 			}
 		}
-		monthly[month].Total += value
-		monthly[month].Count++
+		monthly[month].Total += brlValue
+		if rawValue > 0 {
+			monthly[month].Count++
+		}
 	}
 
 	return nil
 }
 
-func fileSlug(fileName string) string {
-	baseName := filepath.Base(fileName)
-	return strings.TrimSuffix(baseName, filepath.Ext(baseName))
+func purchaseValues(record []string) (float64, float64, error) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(record[0]), 64)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if len(record) >= 4 {
+		if rate, err := strconv.ParseFloat(strings.TrimSpace(record[3]), 64); err == nil {
+			return value, value * rate, nil
+		}
+	}
+
+	return value, value, nil
 }
 
 func dataDir() string {

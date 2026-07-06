@@ -15,7 +15,6 @@ func main() {
 
 	router := gin.Default()
 	router.GET("/", dashboardHandler)
-	router.GET("/months/:slug", monthHandler)
 	router.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "pong",
