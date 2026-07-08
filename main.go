@@ -20,7 +20,11 @@ func main() {
 			"message": "pong",
 		})
 	})
-	router.POST("/webhook/cloudmailin", cloudMailinWebhook)
+	router.POST("/imports/cryptocom-card", importCardCSVHandler)
+	router.GET("/months/:month", monthHandler)
+	router.POST("/months/:month/transactions", addMonthTransactionHandler)
+	router.POST("/months/:month/transactions/:index/category", updateMonthTransactionCategoryHandler)
+	router.POST("/months/:month/transactions/:index/delete", deleteMonthTransactionHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

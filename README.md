@@ -1,12 +1,12 @@
 ---
-title: CloudMailin Webhook Listener
-emoji: 📬
+title: Crypto.com Card Spend Dashboard
+emoji: 💳
 colorFrom: blue
 colorTo: indigo
 sdk: docker
 app_port: 7860
 ---
 
-# CloudMailin Webhook Listener
+# Crypto.com Card Spend Dashboard
 
-Go webhook listener for CloudMailin JSON payloads.
+Dashboard em Go para importar o CSV exportado do cartão Crypto.com, classificar transações e consolidar gastos por mês.

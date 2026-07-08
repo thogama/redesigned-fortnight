@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,22 +12,23 @@ import (
 	"time"
 )
 
-func appendPurchaseCSV(event CryptoPurchaseEvent) error {
-	rate, err := fetchCurrencyBRLRate(event.Currency)
-	if err != nil {
-		return err
+func appendCardTransactionsCSV(transactions []CardTransaction) error {
+	for _, transaction := range transactions {
+		if err := appendCardTransactionCSV(transaction); err != nil {
+			return err
+		}
 	}
-
-	return appendPurchaseCSVWithRate(event, rate)
+	return nil
 }
 
-func appendPurchaseCSVWithRate(event CryptoPurchaseEvent, rate float64) error {
+func appendCardTransactionCSV(transaction CardTransaction) error {
 	dir := dataDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	fileName := filepath.Join(dir, event.Timestamp.Local().Format("2006-01")+".csv")
+	month := transaction.Timestamp.In(appLocation()).Format("2006-01")
+	fileName := filepath.Join(dir, month+".csv")
 	needsHeader := true
 	if info, err := os.Stat(fileName); err == nil && info.Size() > 0 {
 		needsHeader = false
@@ -40,17 +42,233 @@ func appendPurchaseCSVWithRate(event CryptoPurchaseEvent, rate float64) error {
 
 	writer := csv.NewWriter(file)
 	if needsHeader {
-		if err := writer.Write([]string{"value", "timestamp", "currency", "exchange_rate", "category"}); err != nil {
+		if err := writer.Write([]string{"timestamp", "local", "amount", "currency", "usd_amount", "category"}); err != nil {
 			return err
 		}
 	}
 	if err := writer.Write([]string{
-		event.Value,
-		event.Timestamp.Format(time.RFC3339),
-		event.Currency,
-		strconv.FormatFloat(rate, 'f', 6, 64),
-		"",
+		transaction.Timestamp.UTC().Format(time.RFC3339),
+		transaction.Location,
+		strconv.FormatFloat(transaction.Amount, 'f', 2, 64),
+		transaction.Currency,
+		strconv.FormatFloat(transaction.NativeAmountUSD, 'f', 2, 64),
+		transaction.Category,
 	}); err != nil {
+		return err
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func readMonthTransactions(month string) ([]StoredTransaction, float64, float64, error) {
+	fileName := monthlyFileName(month)
+	file, err := os.Open(fileName)
+	if os.IsNotExist(err) {
+		return nil, 0, 0, nil
+	}
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if len(records) == 0 {
+		return nil, 0, 0, nil
+	}
+
+	header := headerIndexes(records[0])
+	transactions := make([]StoredTransaction, 0, len(records)-1)
+	expenseTotal := 0.0
+	refundTotal := 0.0
+	for index, record := range records[1:] {
+		transaction, ok := storedTransaction(header, record, index)
+		if !ok {
+			continue
+		}
+		if transaction.Amount < 0 {
+			expenseTotal += math.Abs(transaction.Amount)
+		} else if transaction.Amount > 0 {
+			refundTotal += transaction.Amount
+		}
+		transactions = append(transactions, transaction)
+	}
+
+	sort.Slice(transactions, func(i, j int) bool {
+		return transactions[i].Timestamp.After(transactions[j].Timestamp)
+	})
+
+	return transactions, expenseTotal, refundTotal, nil
+}
+
+func categorySpends(transactions []StoredTransaction) []CategorySpend {
+	totals := make(map[string]float64)
+	maxTotal := 0.0
+	for _, transaction := range transactions {
+		category := baseCategory(transaction.Category)
+		if category == "" {
+			category = "sem categoria"
+		}
+		totals[category] += -transaction.Amount
+		if totals[category] > maxTotal {
+			maxTotal = totals[category]
+		}
+	}
+	if len(totals) == 0 {
+		return nil
+	}
+
+	spends := make([]CategorySpend, 0, len(totals))
+	for category, total := range totals {
+		if total <= 0 {
+			continue
+		}
+		percent := 0.0
+		if maxTotal > 0 {
+			percent = total / maxTotal * 100
+		}
+		spends = append(spends, CategorySpend{
+			Category: category,
+			Total:    total,
+			Label:    formatBRL(total),
+			Percent:  strconv.FormatFloat(percent, 'f', 2, 64) + "%",
+		})
+	}
+
+	sort.Slice(spends, func(i, j int) bool {
+		return spends[i].Total > spends[j].Total
+	})
+
+	return spends
+}
+
+func filterTransactionsByCategory(transactions []StoredTransaction, category string) []StoredTransaction {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return transactions
+	}
+
+	filtered := make([]StoredTransaction, 0, len(transactions))
+	for _, transaction := range transactions {
+		if transaction.Category == category {
+			filtered = append(filtered, transaction)
+		}
+	}
+	return filtered
+}
+
+func addManualTransaction(timestamp time.Time, location string, amount float64, category string, refund bool) error {
+	if amount <= 0 {
+		return nil
+	}
+
+	category = strings.TrimSpace(category)
+	storedAmount := -amount
+	if refund {
+		storedAmount = amount
+		category = refundCategory(category)
+	}
+
+	return appendCardTransactionCSV(CardTransaction{
+		Timestamp:       timestamp,
+		Location:        strings.TrimSpace(location),
+		Currency:        "BRL",
+		Amount:          storedAmount,
+		NativeAmountUSD: 0,
+		Category:        category,
+	})
+}
+
+func deleteMonthTransaction(month string, transactionIndex int) error {
+	fileName := monthlyFileName(month)
+	records, err := readMonthlyRecords(fileName)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	targetRecordIndex := transactionIndex + 1
+	if targetRecordIndex <= 0 || targetRecordIndex >= len(records) {
+		return nil
+	}
+
+	records = append(records[:targetRecordIndex], records[targetRecordIndex+1:]...)
+	return writeMonthlyRecords(fileName, records)
+}
+
+func updateMonthTransactionCategory(month string, transactionIndex int, category string) error {
+	fileName := monthlyFileName(month)
+	records, err := readMonthlyRecords(fileName)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	targetRecordIndex := transactionIndex + 1
+	if targetRecordIndex <= 0 || targetRecordIndex >= len(records) {
+		return nil
+	}
+
+	header := headerIndexes(records[0])
+	categoryIndex, ok := header["category"]
+	if !ok {
+		return nil
+	}
+	for len(records[targetRecordIndex]) <= categoryIndex {
+		records[targetRecordIndex] = append(records[targetRecordIndex], "")
+	}
+	category = strings.TrimSpace(category)
+	records[targetRecordIndex][categoryIndex] = category
+
+	amountIndex, ok := header["amount"]
+	if ok && amountIndex < len(records[targetRecordIndex]) {
+		amount, err := parseCSVFloat(records[targetRecordIndex][amountIndex])
+		if err == nil {
+			amount = math.Abs(amount)
+			if !isRefundCategory(category) {
+				amount = -amount
+			}
+			records[targetRecordIndex][amountIndex] = strconv.FormatFloat(amount, 'f', 2, 64)
+		}
+	}
+
+	return writeMonthlyRecords(fileName, records)
+}
+
+func readMonthlyRecords(fileName string) ([][]string, error) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	closeErr := file.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return records, nil
+}
+
+func writeMonthlyRecords(fileName string, records [][]string) error {
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	if err := writer.WriteAll(records); err != nil {
 		return err
 	}
 	writer.Flush()
@@ -94,54 +312,140 @@ func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend) er
 	if err != nil {
 		return err
 	}
+	if len(records) == 0 {
+		return nil
+	}
 
-	for index, record := range records {
-		if index == 0 && len(record) >= 2 && record[0] == "value" && record[1] == "timestamp" {
+	header := headerIndexes(records[0])
+	for _, record := range records[1:] {
+		if len(record) == 0 {
 			continue
 		}
-		if len(record) < 2 {
-			continue
-		}
 
-		rawValue, brlValue, err := purchaseValues(record)
+		timestamp, amount, err := storedTransactionValues(header, record)
 		if err != nil {
 			continue
 		}
 
-		timestamp, err := time.Parse(time.RFC3339, strings.TrimSpace(record[1]))
-		if err != nil {
-			continue
-		}
-
-		month := timestamp.Local().Format("2006-01")
+		month := timestamp.In(appLocation()).Format("2006-01")
 		if _, ok := monthly[month]; !ok {
+			monthTimestamp, err := time.Parse("2006-01", month)
+			if err != nil {
+				monthTimestamp = timestamp.In(appLocation())
+			}
 			monthly[month] = &MonthlySpend{
 				Month:      month,
-				MonthLabel: monthLabel(timestamp.Local()),
+				MonthLabel: monthLabel(monthTimestamp),
 			}
 		}
-		monthly[month].Total += brlValue
-		if rawValue > 0 {
+		if amount < 0 {
+			monthly[month].Total += math.Abs(amount)
 			monthly[month].Count++
+		} else {
+			monthly[month].Total -= amount
 		}
 	}
 
 	return nil
 }
 
-func purchaseValues(record []string) (float64, float64, error) {
-	value, err := strconv.ParseFloat(strings.TrimSpace(record[0]), 64)
+func storedTransactionValues(header map[string]int, record []string) (time.Time, float64, error) {
+	timestamp, err := time.Parse(time.RFC3339, field(header, record, "timestamp"))
 	if err != nil {
-		return 0, 0, err
+		return time.Time{}, 0, err
 	}
 
-	if len(record) >= 4 {
-		if rate, err := strconv.ParseFloat(strings.TrimSpace(record[3]), 64); err == nil {
-			return value, value * rate, nil
-		}
+	amount, err := parseCSVFloat(field(header, record, "amount"))
+	if err != nil {
+		return time.Time{}, 0, err
 	}
 
-	return value, value, nil
+	return timestamp, amount, nil
+}
+
+func storedTransaction(header map[string]int, record []string, index int) (StoredTransaction, bool) {
+	timestamp, amount, err := storedTransactionValues(header, record)
+	if err != nil {
+		return StoredTransaction{}, false
+	}
+
+	return StoredTransaction{
+		Index:           index,
+		Timestamp:       timestamp,
+		TimestampLabel:  timestamp.In(appLocation()).Format("02/01/2006 15:04"),
+		Location:        field(header, record, "local"),
+		Amount:          amount,
+		AmountLabel:     formatSignedBRL(amount),
+		Currency:        field(header, record, "currency"),
+		USDAmount:       mustParseCSVFloat(field(header, record, "usd_amount")),
+		Category:        field(header, record, "category"),
+		CategoryOptions: categoryOptions(field(header, record, "category")),
+	}, true
+}
+
+func monthlyFileName(month string) string {
+	return filepath.Join(dataDir(), month+".csv")
+}
+
+func mustParseCSVFloat(value string) float64 {
+	parsed, err := parseCSVFloat(value)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func categoryOptions(selected string) []CategoryOption {
+	categories := transactionCategories()
+	options := make([]CategoryOption, 0, len(categories))
+	for _, category := range categories {
+		options = append(options, CategoryOption{
+			Value:    category,
+			Selected: category == selected,
+		})
+	}
+	return options
+}
+
+func filterOptions(selected string) []FilterOption {
+	options := []FilterOption{{Label: "Todas", Value: "", Selected: selected == ""}}
+	for _, category := range transactionCategories() {
+		options = append(options, FilterOption{
+			Label:    category,
+			Value:    category,
+			Selected: selected == category,
+		})
+	}
+	return options
+}
+
+func expenseCategories() []string {
+	return []string{"comida", "contas", "lazer", "uber", "carro"}
+}
+
+func transactionCategories() []string {
+	categories := append([]string{}, expenseCategories()...)
+	for _, category := range expenseCategories() {
+		categories = append(categories, refundCategory(category))
+	}
+	return categories
+}
+
+func refundCategory(category string) string {
+	category = strings.TrimSpace(category)
+	if category == "" || isRefundCategory(category) {
+		return category
+	}
+	return "ressarcimento-" + category
+}
+
+func isRefundCategory(category string) bool {
+	return strings.HasPrefix(strings.TrimSpace(category), "ressarcimento-")
+}
+
+func baseCategory(category string) string {
+	category = strings.TrimSpace(category)
+	return strings.TrimPrefix(category, "ressarcimento-")
 }
 
 func dataDir() string {
@@ -150,5 +454,5 @@ func dataDir() string {
 		return "data"
 	}
 
-	return dir
+	return strings.TrimSpace(dir)
 }
