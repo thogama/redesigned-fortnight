@@ -13,10 +13,20 @@ import (
 )
 
 func appendCardTransactionsCSV(transactions []CardTransaction) error {
+	existingKeys, err := existingTransactionKeys()
+	if err != nil {
+		return err
+	}
+
 	for _, transaction := range transactions {
+		key := cardTransactionKey(transaction)
+		if existingKeys[key] {
+			continue
+		}
 		if err := appendCardTransactionCSV(transaction); err != nil {
 			return err
 		}
+		existingKeys[key] = true
 	}
 	return nil
 }
@@ -46,18 +56,86 @@ func appendCardTransactionCSV(transaction CardTransaction) error {
 			return err
 		}
 	}
-	if err := writer.Write([]string{
+	if err := writer.Write(cardTransactionRecord(transaction)); err != nil {
+		return err
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func cardTransactionRecord(transaction CardTransaction) []string {
+	return []string{
 		transaction.Timestamp.UTC().Format(time.RFC3339),
 		transaction.Location,
 		strconv.FormatFloat(transaction.Amount, 'f', 2, 64),
 		transaction.Currency,
 		strconv.FormatFloat(transaction.NativeAmountUSD, 'f', 2, 64),
 		transaction.Category,
-	}); err != nil {
-		return err
 	}
-	writer.Flush()
-	return writer.Error()
+}
+
+func existingTransactionKeys() (map[string]bool, error) {
+	keys := map[string]bool{}
+	files, err := filepath.Glob(filepath.Join(dataDir(), "*.csv"))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, fileName := range files {
+		records, err := readMonthlyRecords(fileName)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(records) == 0 {
+			continue
+		}
+
+		header := headerIndexes(records[0])
+		for _, record := range records[1:] {
+			key := storedRecordKey(header, record)
+			if key != "" {
+				keys[key] = true
+			}
+		}
+	}
+
+	return keys, nil
+}
+
+func cardTransactionKey(transaction CardTransaction) string {
+	return transactionKey(
+		transaction.Timestamp.UTC().Format(time.RFC3339),
+		transaction.Location,
+		strconv.FormatFloat(transaction.Amount, 'f', 2, 64),
+		transaction.Currency,
+		strconv.FormatFloat(transaction.NativeAmountUSD, 'f', 2, 64),
+	)
+}
+
+func storedRecordKey(header map[string]int, record []string) string {
+	return transactionKey(
+		field(header, record, "timestamp"),
+		field(header, record, "local"),
+		field(header, record, "amount"),
+		field(header, record, "currency"),
+		field(header, record, "usd_amount"),
+	)
+}
+
+func transactionKey(timestamp, location, amount, currency, usdAmount string) string {
+	timestamp = strings.TrimSpace(timestamp)
+	location = strings.TrimSpace(location)
+	amount = strings.TrimSpace(amount)
+	currency = strings.TrimSpace(currency)
+	usdAmount = strings.TrimSpace(usdAmount)
+	if timestamp == "" || location == "" || amount == "" {
+		return ""
+	}
+
+	return strings.Join([]string{timestamp, location, amount, currency, usdAmount}, "\x1f")
 }
 
 func readMonthTransactions(month string) ([]StoredTransaction, float64, float64, error) {

@@ -88,6 +88,43 @@ func TestReadMonthlySpendsCountsNegativeCardAmountsAsExpenses(t *testing.T) {
 	}
 }
 
+func TestAppendCardTransactionsCSVSkipsAlreadyImportedTransactions(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("DATA_DIR", dataDir)
+
+	transaction := CardTransaction{
+		Timestamp:       time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+		Location:        "Alghusn",
+		Currency:        "BRL",
+		Amount:          -25,
+		NativeAmountUSD: -5,
+		Category:        "comida",
+	}
+
+	if err := appendCardTransactionsCSV([]CardTransaction{transaction}); err != nil {
+		t.Fatalf("append first import: %v", err)
+	}
+
+	transaction.Category = "lazer"
+	if err := appendCardTransactionsCSV([]CardTransaction{transaction}); err != nil {
+		t.Fatalf("append duplicate import: %v", err)
+	}
+
+	transactions, expenseTotal, _, err := readMonthTransactions("2026-07")
+	if err != nil {
+		t.Fatalf("read month transactions: %v", err)
+	}
+	if len(transactions) != 1 {
+		t.Fatalf("expected one transaction after duplicate import, got %d", len(transactions))
+	}
+	if transactions[0].Category != "comida" {
+		t.Fatalf("expected original category to be preserved, got %q", transactions[0].Category)
+	}
+	if expenseTotal != 25 {
+		t.Fatalf("expected expense total 25, got %.2f", expenseTotal)
+	}
+}
+
 func TestCardTransactionsUseTransactionTimestampMonth(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("DATA_DIR", dataDir)
