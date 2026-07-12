@@ -76,7 +76,7 @@ func cardTransactionRecord(transaction CardTransaction) []string {
 
 func existingTransactionKeys() (map[string]bool, error) {
 	keys := map[string]bool{}
-	files, err := filepath.Glob(filepath.Join(dataDir(), "*.csv"))
+	files, err := monthlyDataFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +354,7 @@ func writeMonthlyRecords(fileName string, records [][]string) error {
 }
 
 func readMonthlySpends() ([]MonthlySpend, error) {
-	files, err := filepath.Glob(filepath.Join(dataDir(), "*.csv"))
+	files, err := monthlyDataFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +376,24 @@ func readMonthlySpends() ([]MonthlySpend, error) {
 	})
 
 	return spends, nil
+}
+
+// monthlyDataFiles returns only canonical monthly files. Files such as
+// 2026-07-back.csv are backups and must not affect imports or dashboard totals.
+func monthlyDataFiles() ([]string, error) {
+	files, err := filepath.Glob(filepath.Join(dataDir(), "????-??.csv"))
+	if err != nil {
+		return nil, err
+	}
+
+	monthlyFiles := make([]string, 0, len(files))
+	for _, fileName := range files {
+		month := strings.TrimSuffix(filepath.Base(fileName), ".csv")
+		if _, err := time.Parse("2006-01", month); err == nil {
+			monthlyFiles = append(monthlyFiles, fileName)
+		}
+	}
+	return monthlyFiles, nil
 }
 
 func readMonthlySpendsFile(fileName string, monthly map[string]*MonthlySpend) error {

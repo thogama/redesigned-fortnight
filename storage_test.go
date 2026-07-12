@@ -125,6 +125,59 @@ func TestAppendCardTransactionsCSVSkipsAlreadyImportedTransactions(t *testing.T)
 	}
 }
 
+func TestImportPreservesManualRefundWhenCSVContainsMultipleMonths(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("DATA_DIR", dataDir)
+
+	refundTimestamp := time.Date(2026, 7, 1, 12, 47, 52, 0, appLocation())
+	if err := addManualTransaction(refundTimestamp, "Casa dos Pais e Isababela", 100, "lazer", true); err != nil {
+		t.Fatalf("add manual refund: %v", err)
+	}
+
+	imported := []CardTransaction{
+		{
+			Timestamp:       time.Date(2026, 7, 7, 20, 46, 59, 0, time.UTC),
+			Location:        "Dl *Uber Rides",
+			Currency:        "BRL",
+			Amount:          -11.35,
+			NativeAmountUSD: -2.21,
+			Category:        "uber",
+		},
+		{
+			Timestamp:       time.Date(2026, 6, 30, 20, 0, 0, 0, time.UTC),
+			Location:        "Mercado",
+			Currency:        "BRL",
+			Amount:          -25,
+			NativeAmountUSD: -5,
+			Category:        "comida",
+		},
+	}
+	if err := appendCardTransactionsCSV(imported); err != nil {
+		t.Fatalf("import mixed-month transactions: %v", err)
+	}
+
+	transactions, _, refundTotal, err := readMonthTransactions("2026-07")
+	if err != nil {
+		t.Fatalf("read July transactions: %v", err)
+	}
+	if len(transactions) != 2 {
+		t.Fatalf("expected imported expense and preserved refund, got %d transactions", len(transactions))
+	}
+	if refundTotal != 100 {
+		t.Fatalf("expected preserved refund total 100, got %.2f", refundTotal)
+	}
+
+	foundRefund := false
+	for _, transaction := range transactions {
+		if transaction.Location == "Casa dos Pais e Isababela" && transaction.Amount == 100 && transaction.Category == "ressarcimento-lazer" {
+			foundRefund = true
+		}
+	}
+	if !foundRefund {
+		t.Fatal("expected manual refund to remain unchanged after import")
+	}
+}
+
 func TestCardTransactionsUseTransactionTimestampMonth(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("DATA_DIR", dataDir)
