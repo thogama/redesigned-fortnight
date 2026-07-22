@@ -27,11 +27,11 @@ var locationCategoryRules = []struct {
 	category string
 	keywords []string
 }{
-	{category: "uber", keywords: []string{"uber"}},
+	{category: "uber", keywords: []string{"uber", "99app", "99 pop", "taxi", "táxi"}},
 	{category: "carro", keywords: []string{"posto", "petro", "gasolina", "combustivel", "combustível"}},
-	{category: "comida", keywords: []string{"ifood", "i food", "restaurante", "supermercado", "mercado", "padaria", "lanchonete"}},
-	{category: "contas", keywords: []string{"boleto", "energia", "internet", "telefone", "aluguel"}},
-	{category: "lazer", keywords: []string{"cinema", "ingresso", "bar", "show", "spotify", "netflix"}},
+	{category: "comida", keywords: []string{"ifood", "i food", "restaurante", "supermercado", "mercado", "padaria", "lanchonete", "pizzaria", "pizza", "carnes", "acougue", "açougue"}},
+	{category: "contas", keywords: []string{"boleto", "energia", "internet", "telefone", "aluguel", "agua", "água", "vivo", "claro", "tim ", "enel"}},
+	{category: "lazer", keywords: []string{"cinema", "ingresso", "shopping", "bar", "show", "spotify", "netflix", "jogo"}},
 }
 
 func parseCryptoComCardCSV(reader io.Reader) ([]CardTransaction, error) {
@@ -95,18 +95,66 @@ func parseCryptoComCardRecord(header map[string]int, record []string) (CardTrans
 }
 
 func classifyCardTransactions(transactions []CardTransaction) {
+	unknownIndexes := make([]int, 0)
+	unknownExpenses := make([]expenseToClassify, 0)
 	for index := range transactions {
-		transactions[index].Category = classifyByLocation(transactions[index].Location)
+		if transactions[index].Amount > 0 {
+			// Refunds must not use weak value/time inference: a small credit is
+			// not necessarily a transport refund.
+			transactions[index].Category = classifyByLocation(transactions[index].Location)
+		} else {
+			transactions[index].Category = classifyByLocation(transactions[index].Location)
+			if transactions[index].Category == "" {
+				unknownIndexes = append(unknownIndexes, index)
+				unknownExpenses = append(unknownExpenses, expenseToClassify{
+					Establishment: transactions[index].Location,
+					Value:         math.Abs(transactions[index].Amount),
+					LocalDateTime: transactions[index].Timestamp.In(appLocation()).Format(time.RFC3339),
+				})
+			}
+		}
 		if transactions[index].Amount > 0 && transactions[index].Category != "" {
 			transactions[index].Category = refundCategory(transactions[index].Category)
+		}
+	}
+	if categories, err := classifyExpensesWithOpenAI(unknownExpenses); err == nil && len(categories) == len(unknownIndexes) {
+		for index, category := range categories {
+			transactions[unknownIndexes[index]].Category = category
 		}
 	}
 
 	applyTimeBasedCategories(transactions)
 }
 
+// classifyExpense combines the establishment/location description, the value and
+// the local date/time. Merchant matches are strong evidence; value and local time
+// are only used as a fallback so a supermarket on Sunday is still food.
+func classifyExpense(establishment string, value float64, timestamp time.Time) string {
+	if category := classifyByLocation(establishment); category != "" {
+		return category
+	}
+
+	normalized := normalizeDescription(establishment)
+	// Card statements commonly abbreviate 99 rides to just "99". Restrict the
+	// match by value to avoid treating arbitrary merchant numbers as transport.
+	if normalized == "99" && value > 0 && value <= 200 {
+		return "uber"
+	}
+
+	localTimestamp := timestamp.In(appLocation())
+	weekday := localTimestamp.Weekday()
+	hour := localTimestamp.Hour()
+	if weekday >= time.Monday && weekday <= time.Friday && hour >= 6 && hour < 19 && value > 0 && value <= 25 {
+		return "uber"
+	}
+	if weekday == time.Saturday || weekday == time.Sunday {
+		return "lazer"
+	}
+	return ""
+}
+
 func classifyByLocation(location string) string {
-	normalized := strings.ToLower(strings.TrimSpace(location))
+	normalized := normalizeDescription(location)
 	for _, rule := range locationCategoryRules {
 		for _, keyword := range rule.keywords {
 			if strings.Contains(normalized, keyword) {
@@ -118,6 +166,16 @@ func classifyByLocation(location string) string {
 	return ""
 }
 
+func normalizeDescription(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer(
+		"á", "a", "à", "a", "â", "a", "ã", "a",
+		"é", "e", "ê", "e", "í", "i", "ó", "o",
+		"ô", "o", "õ", "o", "ú", "u", "ç", "c",
+	)
+	return strings.Join(strings.Fields(replacer.Replace(value)), " ")
+}
+
 func applyTimeBasedCategories(transactions []CardTransaction) {
 	for index := range transactions {
 		transaction := transactions[index]
@@ -125,21 +183,8 @@ func applyTimeBasedCategories(transactions []CardTransaction) {
 			continue
 		}
 
-		localTimestamp := transaction.Timestamp.In(appLocation())
-		weekday := localTimestamp.Weekday()
-		usdAmount := math.Abs(transaction.NativeAmountUSD)
-		hour := localTimestamp.Hour()
-
-		if weekday == time.Sunday {
-			transactions[index].Category = "lazer"
-			continue
-		}
-		if weekday == time.Saturday && transactions[index].Category == "" {
-			transactions[index].Category = "lazer"
-			continue
-		}
-		if weekday >= time.Monday && weekday <= time.Friday && hour >= 6 && hour < 19 && usdAmount <= 4 && transactions[index].Category == "" {
-			transactions[index].Category = "uber"
+		if transactions[index].Category == "" {
+			transactions[index].Category = classifyExpense(transaction.Location, math.Abs(transaction.Amount), transaction.Timestamp)
 		}
 	}
 

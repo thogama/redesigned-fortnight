@@ -244,6 +244,18 @@ func addManualTransaction(timestamp time.Time, location string, amount float64, 
 	}
 
 	category = strings.TrimSpace(category)
+	if category == "" || category == "automatico" {
+		categories, err := classifyExpensesWithOpenAI([]expenseToClassify{{
+			Establishment: location,
+			Value:         amount,
+			LocalDateTime: timestamp.In(appLocation()).Format(time.RFC3339),
+		}})
+		if err == nil && len(categories) == 1 {
+			category = categories[0]
+		} else {
+			category = classifyExpense(location, amount, timestamp)
+		}
+	}
 	storedAmount := -amount
 	if refund {
 		storedAmount = amount

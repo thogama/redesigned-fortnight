@@ -218,7 +218,8 @@ var monthTemplate = htmltemplate.Must(htmltemplate.New("month").Parse(`<!doctype
         </select>
       </label>
       <label>Categoria
-        <select name="category" required>
+		<select name="category">
+		  <option value="automatico">Automática</option>
           {{range .CategoryOptions}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </label>

@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCryptoComCardCSVCategorizesByLocation(t *testing.T) {
@@ -17,11 +18,39 @@ func TestParseCryptoComCardCSVCategorizesByLocation(t *testing.T) {
 		t.Fatalf("parse csv: %v", err)
 	}
 
-	expected := []string{"uber", "comida", "lazer", "carro", ""}
+	expected := []string{"uber", "comida", "comida", "carro", ""}
 	for index, category := range expected {
 		if transactions[index].Category != category {
 			t.Fatalf("transaction %d: expected category %q, got %q", index, category, transactions[index].Category)
 		}
+	}
+}
+
+func TestClassifyExpenseUsesEstablishmentValueAndLocalTime(t *testing.T) {
+	tests := []struct {
+		name          string
+		establishment string
+		value         float64
+		timestamp     string
+		want          string
+	}{
+		{name: "accent insensitive merchant", establishment: "Açougue Central", value: 80, timestamp: "2026-07-05T12:00:00Z", want: "comida"},
+		{name: "99 ride within expected value", establishment: "99", value: 16.80, timestamp: "2026-07-06T09:00:00Z", want: "uber"},
+		{name: "small weekday daytime expense", establishment: "Pessoa desconhecida", value: 12, timestamp: "2026-07-07T12:00:00Z", want: "uber"},
+		{name: "unknown weekend expense", establishment: "Evento local", value: 50, timestamp: "2026-07-05T12:00:00Z", want: "lazer"},
+		{name: "strong merchant wins on weekend", establishment: "Supermercado Aruana", value: 50, timestamp: "2026-07-05T12:00:00Z", want: "comida"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			timestamp, err := time.Parse(time.RFC3339, test.timestamp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := classifyExpense(test.establishment, test.value, timestamp); got != test.want {
+				t.Fatalf("expected %q, got %q", test.want, got)
+			}
+		})
 	}
 }
 
